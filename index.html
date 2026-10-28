@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fietsroute Planner — teken, kies ondergrond, exporteer GPX</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1a202c; background: #f0f4f8; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  #app { display: flex; height: 100vh; }
+
+  /* ── Zijpaneel ─────────────────────────────── */
+  #panel { width: 360px; min-width: 360px; background: #ffffff; border-right: 1px solid #d7dee8; display: flex; flex-direction: column; overflow-y: auto; }
+  #panel .inner { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  h1 { font-size: 19px; color: #0f5132; }
+  .sub { font-size: 12.5px; color: #5b6673; line-height: 1.5; }
+  section { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; background: #fbfdff; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #475569; margin-bottom: 8px; }
+  label.small { font-size: 12px; color: #5b6673; display: block; margin-bottom: 4px; }
+  input[type=text], input[type=password] { width: 100%; padding: 8px 9px; border: 1px solid #cbd5e1; border-radius: 7px; font-size: 13px; }
+  button { cursor: pointer; border: none; border-radius: 8px; font-size: 13.5px; padding: 9px 12px; font-weight: 500; }
+  .btn-primary { background: #0f5132; color: #fff; width: 100%; }
+  .btn-primary:disabled { background: #9aa5b1; cursor: not-allowed; }
+  .btn-ghost { background: #eef2f7; color: #334155; width: 100%; }
+  .btn-save { background: #e2efe9; color: #0f5132; width: 100%; margin-top: 6px; }
+
+  .radios { display: flex; flex-direction: column; gap: 6px; }
+  .radios label { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; background: #fff; }
+  .radios label.active { border-color: #0f5132; background: #e6f4ec; font-weight: 600; }
+  .radios input { accent-color: #0f5132; margin-top: 3px; }
+  .radios .hint { font-size: 11.5px; color: #64748b; display: block; font-weight: 400; }
+
+  .stat-row { display: flex; gap: 8px; }
+  .stat { flex: 1; background: #eef6f1; border-radius: 8px; padding: 8px; text-align: center; }
+  .stat .v { font-size: 16px; font-weight: 700; color: #0f5132; }
+  .stat .k { font-size: 10.5px; color: #5b6673; text-transform: uppercase; }
+
+  #points { list-style: none; font-size: 13px; }
+  #points li { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; border-bottom: 1px dashed #e2e8f0; }
+  #points li button { background: #fde8e8; color: #b91c1c; padding: 2px 8px; font-size: 12px; border-radius: 6px; }
+
+  #steps { list-style: none; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+  #steps li { background: #f1f5f9; border-left: 3px solid #0f5132; border-radius: 0 8px 8px 0; padding: 7px 9px; }
+  #steps li .d { color: #64748b; font-size: 11.5px; }
+
+  .msg { font-size: 13px; padding: 9px 11px; border-radius: 8px; line-height: 1.45; }
+  .msg.ok { background: #e6f4ec; color: #14532d; }
+  .msg.warn { background: #fef3c7; color: #92400e; }
+  .msg.err { background: #fde8e8; color: #b91c1c; }
+
+  /* ── Kaart ─────────────────────────────────── */
+  #map { flex: 1; min-height: 300px; }
+  .leaflet-container { font: inherit; }
+
+  /* ── Mobiel: paneel boven, kaart onder ─────── */
+  @media (max-width: 700px) {
+    #app { flex-direction: column; }
+    #panel { width: 100%; min-width: 0; order: 1; max-height: 55vh; border-right: none; border-bottom: 1px solid #d7dee8; }
+    #map { order: 2; height: 45vh; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <div class="inner">
+
+      <h1>🚲 Fietsroute Planner</h1>
+      <p class="sub">Tik punten op de kaart om je route te tekenen. De planner zoekt zelf de beste fietswegen ertussen, geeft <strong>Nederlandse afslaginstructies</strong> en maakt er een GPX-bestand van voor je iPhone-app.</p>
+
+      <section>
+        <h2>Routingdienst</h2>
+        <div class="msg ok">✓ BRouter — gratis, geen account, geen sleutel. Je kunt meteen routes tekenen!</div>
+        <p class="sub">De route wordt live berekend door BRouter, een gratis fietsrouteerdienst. Er is niets te registreren: tik gewoon punten op de kaart.</p>
+      </section>
+
+      <section>
+        <h2>Stap 1 · Ondergrond</h2>
+        <div class="radios" id="profileRadios">
+          <label data-profile="fastbike"><input type="radio" name="p" value="fastbike" />Verhard<span class="hint">Alleen asfalt en verharde paden</span></label>
+          <label data-profile="trekking" class="active"><input type="radio" name="p" value="trekking" checked />Beide<span class="hint">Mix van verhard en onverhard, zoals een gewone stads- of toerfietser</span></label>
+          <label data-profile="gravel"><input type="radio" name="p" value="gravel" />Gravel<span class="hint">Prefereert onverharde wegen, gravel- en bospaden</span></label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Stap 2 · Jouw routepunten</h2>
+        <ul id="points"></ul>
+        <p class="sub" id="pointsHint">Tik op de kaart om te beginnen. Minimaal 2 punten nodig.</p>
+        <button class="btn-ghost" id="undoBtn">↩︎ Laatste punt verwijderen</button>
+        <div style="height:6px"></div>
+        <button class="btn-ghost" id="clearBtn">✕ Hele route wissen</button>
+      </section>
+
+      <section id="statsSection" style="display:none">
+        <h2>Route-gegevens</h2>
+        <div class="stat-row">
+          <div class="stat"><div class="v" id="statDist">–</div><div class="k">Afstand</div></div>
+          <div class="stat"><div class="v" id="statUp">–</div><div class="k">Stijgen</div></div>
+          <div class="stat"><div class="v" id="statDown">–</div><div class="k">Dalen</div></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Stap 3 · Afslaginstructies (stem)</h2>
+        <div id="msg" class="msg warn">Nog geen route.</div>
+        <ol id="steps" style="margin-top:8px"></ol>
+      </section>
+
+      <button class="btn-primary" id="gpxBtn" disabled>⬇︎ GPX-bestand downloaden</button>
+      <p class="sub">Het GPX-bestand bevat de routelijn én de Nederlandse instructies. Open het op je iPhone en deel het met je Fietsroutes-app.</p>
+
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  /* ── Basis staat ─────────────────────────────── */
+  var waypoints = [];        // {lat, lng}
+  var routeCoords = [];      // [[lat,lng,ele?], ...]
+  var steps = [];            // {text, lat, lng, distance}
+  var profile = "trekking";
+  var map, routeLine, markers = [];
+
+  var $ = function (id) { return document.getElementById(id); };
+  var msg = $("msg");
+
+  /* ── Kaart ───────────────────────────────────── */
+  map = L.map("map").setView([52.09, 5.12], 12);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  map.on("click", function (e) {
+    waypoints.push({ lat: e.latlng.lat, lng: e.latlng.lng });
+    renderPoints();
+    if (waypoints.length >= 2) calculate();
+  });
+
+  /* ── Ondergrond kiezen ───────────────────────── */
+  Array.prototype.forEach.call(document.querySelectorAll("#profileRadios label"), function (lbl) {
+    lbl.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#profileRadios label"), function (l) { l.classList.remove("active"); });
+      lbl.classList.add("active");
+      profile = lbl.getAttribute("data-profile");
+      if (waypoints.length >= 2) calculate();
+    });
+  });
+
+  /* ── Puntenlijst & knoppen ───────────────────── */
+  function renderPoints() {
+    var ul = $("points");
+    ul.innerHTML = "";
+    waypoints.forEach(function (w, i) {
+      var li = document.createElement("li");
+      var nr = i + 1;
+      var label = (i === 0 ? "Start" : (i === waypoints.length - 1 && waypoints.length > 1 ? "Finish" : "Punt " + nr));
+      li.innerHTML = "<span>" + label + " · " + w.lat.toFixed(5) + ", " + w.lng.toFixed(5) + "</span>";
+      var del = document.createElement("button");
+      del.textContent = "✕";
+      del.onclick = function () { waypoints.splice(i, 1); renderPoints(); drawMarkers(); if (waypoints.length >= 2) calculate(); else resetRoute(); };
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+    $("pointsHint").textContent = waypoints.length === 0 ? "Tik op de kaart om te beginnen. Minimaal 2 punten nodig."
+      : waypoints.length === 1 ? "Nog 1 punt tikken op de kaart..."
+      : "Tik voor meer punten, of pas de lijst hierboven aan.";
+  }
+
+  $("undoBtn").onclick = function () { waypoints.pop(); renderPoints(); drawMarkers(); if (waypoints.length >= 2) calculate(); else resetRoute(); };
+  $("clearBtn").onclick = function () { waypoints = []; renderPoints(); resetRoute(); drawMarkers(); };
+
+  function drawMarkers() {
+    markers.forEach(function (m) { map.removeLayer(m); });
+    markers = waypoints.map(function (w, i) {
+      var label = i === 0 ? "Start" : (i === waypoints.length - 1 && waypoints.length > 1 ? "Finish" : String(i + 1));
+      return L.circleMarker([w.lat, w.lng], { radius: 9, color: "#0f5132", fillColor: "#fff", fillOpacity: 1, weight: 3 })
+        .addTo(map)
+        .bindTooltip(label, { permanent: true, direction: "top" });
+    });
+  }
+
+  function resetRoute() {
+    routeCoords = []; steps = [];
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    $("statsSection").style.display = "none";
+    $("gpxBtn").disabled = true;
+    $("steps").innerHTML = "";
+    setMsg("warn", "Nog geen route.");
+  }
+
+  function setMsg(kind, text) {
+    msg.className = "msg " + kind;
+    msg.textContent = text;
+  }
+
+  /* ── Route berekenen via BRouter (gratis, geen sleutel) ── */
+  function hav(a, b) { /* afstand in meters tussen [lat,lng]-paren */
+    var R = 6371000;
+    var dLat = (b[0] - a[0]) * Math.PI / 180, dLon = (b[1] - a[1]) * Math.PI / 180;
+    var la1 = a[0] * Math.PI / 180, la2 = b[0] * Math.PI / 180;
+    var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+
+  /* Engelse afslagteksten van BRouter naar het Nederlands vertalen */
+  var NL_MAP = [
+    [/^Turn right into (.*)$/, "Sla rechtsaf naar $1"],
+    [/^Turn left into (.*)$/, "Sla linksaf naar $1"],
+    [/^Turn slight right into (.*)$/, "Sla half rechtsaf naar $1"],
+    [/^Turn slight left into (.*)$/, "Sla half linksaf naar $1"],
+    [/^Turn sharp right into (.*)$/, "Sla scherp rechtsaf naar $1"],
+    [/^Turn sharp left into (.*)$/, "Sla scherp linksaf naar $1"],
+    [/^Turn right$/, "Sla rechtsaf"],
+    [/^Turn left$/, "Sla linksaf"],
+    [/^Turn slight right$/, "Sla half rechtsaf"],
+    [/^Turn slight left$/, "Sla half linksaf"],
+    [/^Turn sharp right$/, "Sla scherp rechtsaf"],
+    [/^Turn sharp left$/, "Sla scherp linksaf"],
+    [/^Keep right$/, "Blijf rechts aanhouden"],
+    [/^Keep left$/, "Blijf links aanhouden"],
+    [/^U[- ]turn$/, "Keer om"],
+    [/^Make a U[- ]turn$/, "Keer om"],
+    [/^Enter traffic circle$/, "Ga de rotonde op"],
+    [/^Enter roundabout$/, "Ga de rotonde op"],
+    [/^Leave traffic circle.*$/, "Verlaat de rotonde"],
+    [/^Leave roundabout.*$/, "Verlaat de rotonde"],
+    [/^Get on the ferry$/, "Neem de veerpont"],
+    [/^Get off the ferry$/, "Verlaat de veerpont"],
+    [/^Reach destination.*$/, "Je bent op de bestemming aangekomen"],
+    [/^Start.*$/, "Start"]
+  ];
+  function naarNederlands(t) {
+    t = t.trim();
+    for (var i = 0; i < NL_MAP.length; i++) {
+      if (NL_MAP[i][0].test(t)) return t.replace(NL_MAP[i][0], NL_MAP[i][1]);
+    }
+    return t;
+  }
+
+  function calculate() {
+    drawMarkers();
+    setMsg("ok", "Route wordt berekend…");
+
+    var lonlats = waypoints.map(function (w) { return w.lng + "," + w.lat; }).join("|");
+    var url = "https://brouter.de/brouter?lonlats=" + lonlats +
+      "&profile=" + profile + "&alternativeidx=0&format=gpx";
+
+    fetch(url)
+      .then(function (res) {
+        if (!res.ok) throw new Error("Routeringsdienst gaf foutmelding " + res.status + ". Controleer je internetverbinding.");
+        return res.text();
+      })
+      .then(function (txt) {
+        if (txt.indexOf("<?xml") !== 0) {
+          throw new Error("De routeringsdienst zei: " + txt.slice(0, 160));
+        }
+        var doc = new DOMParser().parseFromString(txt, "application/xml");
+
+        /* Routelijn met hoogtes */
+        var trkpts = doc.getElementsByTagNameNS("*", "trkpt");
+        if (!trkpts.length) throw new Error("Er kon geen route tussen je punten worden gevonden. Probeer de punten iets te verplaatsen.");
+        routeCoords = [];
+        var lastEle = null, totalDist = 0, up = 0, down = 0;
+        for (var i = 0; i < trkpts.length; i++) {
+          var p = trkpts[i];
+          var c = [parseFloat(p.getAttribute("lat")), parseFloat(p.getAttribute("lon")), null];
+          var ele = p.getElementsByTagNameNS("*", "ele");
+          if (ele.length) c[2] = parseFloat(ele[0].textContent);
+          if (routeCoords.length) totalDist += hav(routeCoords[routeCoords.length - 1], c);
+          if (c[2] != null && lastEle != null) {
+            var d = c[2] - lastEle;
+            if (d > 0) up += d; else down -= d;
+          }
+          if (c[2] != null) lastEle = c[2];
+          routeCoords.push(c);
+        }
+
+        if (routeLine) map.removeLayer(routeLine);
+        routeLine = L.polyline(routeCoords.map(function (c) { return [c[0], c[1]]; }),
+          { color: "#0f5132", weight: 5, opacity: 0.85 }).addTo(map);
+        map.fitBounds(routeLine.getBounds().pad(0.15));
+
+        /* Statistieken */
+        $("statsSection").style.display = "block";
+        $("statDist").textContent = fmtDist(totalDist);
+        $("statUp").textContent = Math.round(up) + " m";
+        $("statDown").textContent = Math.round(down) + " m";
+
+        /* Afslaginstructies (uit het GPX-antwoord, vertaald naar het Nederlands) */
+        steps = [];
+        var rtepts = doc.getElementsByTagNameNS("*", "rtept");
+        for (var j = 0; j < rtepts.length; j++) {
+          var rp = rtepts[j];
+          var desc = rp.getElementsByTagNameNS("*", "desc");
+          if (!desc.length || !desc[0].textContent.trim()) continue;
+          steps.push({
+            text: naarNederlands(desc[0].textContent),
+            lat: parseFloat(rp.getAttribute("lat")),
+            lng: parseFloat(rp.getAttribute("lon"))
+          });
+        }
+
+        var ol = $("steps");
+        ol.innerHTML = "";
+        steps.forEach(function (s) {
+          var li = document.createElement("li");
+          li.textContent = s.text;
+          ol.appendChild(li);
+        });
+
+        $("gpxBtn").disabled = false;
+        setMsg("ok", "Route klaar! ✓ " + steps.length + " instructies. Download hieronder het GPX-bestand.");
+      })
+      .catch(function (err) {
+        setMsg("err", "❌ " + err.message);
+        $("gpxBtn").disabled = true;
+      });
+  }
+
+  function fmtDist(m) {
+    if (m >= 1000) return (m / 1000).toFixed(m >= 10000 ? 0 : 1).replace(".", ",") + " km";
+    return Math.round(m) + " m";
+  }
+
+  /* ── GPX-bestand maken ──────────────────────── */
+  $("gpxBtn").onclick = function () {
+    if (routeCoords.length < 2) return;
+
+    function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+    var g = '<?xml version="1.0" encoding="UTF-8"?>\n';
+    g += '<gpx version="1.1" creator="Fietsroute Planner" xmlns="http://www.topografix.com/GPX/1/1">\n';
+    g += "  <metadata><name>Fietsroute " + new Date().toLocaleDateString("nl-NL") + "</name></metadata>\n";
+
+    /* Instructies als route-punten (de app spreekt deze voor) */
+    g += "  <rte>\n    <name>Nederlandse afslaginstructies</name>\n";
+    steps.forEach(function (s) {
+      g += '    <rtept lat="' + s.lat + '" lon="' + s.lng + '">\n';
+      g += "      <desc>" + esc(s.text) + "</desc>\n";
+      g += "    </rtept>\n";
+    });
+    g += "  </rte>\n";
+
+    /* Routelijn met hoogte */
+    g += "  <trk>\n    <name>Route</name>\n    <trkseg>\n";
+    routeCoords.forEach(function (c) {
+      g += '      <trkpt lat="' + c[0] + '" lon="' + c[1] + '">' + (c[2] != null ? "<ele>" + Math.round(c[2]) + "</ele>" : "") + "</trkpt>\n";
+    });
+    g += "    </trkseg>\n  </trk>\n</gpx>\n";
+
+    var blob = new Blob([g], { type: "application/gpx+xml" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "fietsroute.gpx";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  renderPoints();
+})();
+</script>
+</body>
+</html>
